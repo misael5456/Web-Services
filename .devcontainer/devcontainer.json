@@ -1,0 +1,14 @@
+{
+  "name": "File Server REST",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": { "label": "API REST", "onAutoForward": "notify" }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["humao.rest-client"]
+    }
+  },
+  "postCreateCommand": "npm install && cp -n .env.example .env"
+}

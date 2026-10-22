@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cliente REST · Servidor de archivos</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --fg:#1d2330; --muted:#677084; --line:#dde1e8; --accent:#2563eb; --good:#15803d; --bad:#b91c1c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151c; --card:#1b202b; --fg:#e6e9f0; --muted:#98a1b3; --line:#2c3342; --accent:#6ea0ff; --good:#4ade80; --bad:#f87171; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:1rem; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; display: grid; gap: 1rem; }
+  h1 { font-size: 1.3rem; margin: 0; }
+  h2 { font-size: 1rem; margin: 0 0 .6rem; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:1rem; }
+  .row { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
+  label { display:flex; flex-direction:column; gap:.2rem; font-size:.8rem; color:var(--muted); flex:1 1 220px; }
+  input { padding:.45rem .6rem; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); font:inherit; }
+  button { padding:.4rem .8rem; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--fg); font:inherit; cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:default; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:var(--bad); }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:.45rem .4rem; border-bottom:1px solid var(--line); vertical-align:middle; }
+  th { font-size:.8rem; color:var(--muted); font-weight:600; }
+  .table-wrap { overflow-x:auto; }
+  .acts { display:flex; gap:.3rem; flex-wrap:wrap; }
+  .acts button { padding:.2rem .5rem; font-size:.8rem; }
+  #msg { margin-top:.6rem; min-height:1.4em; font-size:.9rem; word-break:break-word; }
+  .ok, .good { color:var(--good); } .err, .bad { color:var(--bad); }
+  details { border-bottom:1px solid var(--line); padding:.35rem 0; font-size:.85rem; }
+  summary { cursor:pointer; font-family:ui-monospace, monospace; }
+  pre { margin:.4rem 0 0; padding:.5rem; background:var(--bg); border-radius:6px; overflow-x:auto; font-size:.8rem; }
+  .muted { color:var(--muted); font-size:.85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Cliente REST · Servidor de archivos</h1>
+
+  <section>
+    <h2>Conexión</h2>
+    <div class="row">
+      <label>URL base del servidor<input id="base" type="url" placeholder="http://localhost:3000"></label>
+      <label>API key (opcional)<input id="key" type="password" placeholder="x-api-key" autocomplete="off"></label>
+      <button id="btnHealth">Probar conexión</button>
+    </div>
+    <div id="msg"></div>
+  </section>
+
+  <section>
+    <h2>Subir archivo</h2>
+    <div class="row">
+      <input id="file" type="file">
+      <button id="btnPost" class="primary" title="multipart/form-data. 409 si ya existe">Subir (POST)</button>
+      <button id="btnPut" title="Crea o reemplaza usando el nombre del archivo">Crear/Reemplazar (PUT)</button>
+    </div>
+  </section>
+
+  <section>
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">Archivos</h2>
+      <button id="btnList">Actualizar (GET)</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Nombre</th><th>Tamaño</th><th>Modificado</th><th>Acciones</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="4" class="muted">Sin datos todavía</td></tr></tbody>
+      </table>
+    </div>
+    <div class="row" style="margin-top:.6rem">
+      <button id="prev">← Anterior</button>
+      <button id="next">Siguiente →</button>
+      <span id="pageinfo" class="muted"></span>
+    </div>
+  </section>
+
+  <section>
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">Registro de peticiones HTTP</h2>
+      <button id="btnClear">Limpiar</button>
+    </div>
+    <p class="muted">Cada petición muestra método, ruta, código de estado y cabeceras clave. Haz clic para ver el detalle.</p>
+    <div id="log"></div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const el = (tag, props = {}, ...kids) => { const n = document.createElement(tag); Object.assign(n, props); n.append(...kids); return n; };
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+const fmtSize = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(2)} MB`;
+const FILES = '/api/files';
+const LIMIT = 10;
+let page = 1;
+
+$('#base').value = store.get('base') || (location.protocol.startsWith('http') ? location.origin : 'http://localhost:3000');
+$('#key').value = store.get('key') || '';
+
+function notify(msg, error = false) {
+  const n = $('#msg');
+  n.textContent = msg;
+  n.className = error ? 'err' : 'ok';
+}
+
+function addLog(method, path, res, info, body, err) {
+  const status = res ? `${res.status} ${res.statusText}`.trim() : 'SIN RESPUESTA';
+  const lines = [];
+  if (info) lines.push(`Petición: ${info}`);
+  if (res) {
+    for (const h of ['content-type', 'content-length', 'location', 'last-modified', 'content-disposition']) {
+      const v = res.headers.get(h);
+      if (v) lines.push(`${h}: ${v}`);
+    }
+  }
+  if (body) {
+    try { body = JSON.stringify(JSON.parse(body), null, 2); } catch {}
+    lines.push('', body);
+  }
+  if (err) lines.push(err);
+  $('#log').prepend(el('details', {},
+    el('summary', {}, el('b', { textContent: method }), ` ${path} → `,
+      el('span', { className: res && res.ok ? 'good' : 'bad', textContent: status })),
+    el('pre', { textContent: lines.join('\n') || '(sin detalles)' })));
+}
+
+// Envoltorio de fetch: agrega x-api-key, registra la petición y lanza error si el estado no es 2xx
+async function api(method, path, { body, headers = {}, info = '' } = {}) {
+  const base = $('#base').value.trim().replace(/\/+$/, '');
+  const key = $('#key').value.trim();
+  store.set('base', base);
+  store.set('key', key);
+  const h = { ...headers };
+  if (key) h['x-api-key'] = key;
+
+  let res;
+  try {
+    res = await fetch(base + path, { method, headers: h, body });
+  } catch (e) {
+    addLog(method, path, null, info, '', 'No se pudo conectar: servidor apagado, URL incorrecta o CORS bloqueado.');
+    throw new Error('No se pudo conectar con el servidor');
+  }
+  const text = (res.headers.get('content-type') || '').includes('json') ? await res.clone().text() : '';
+  addLog(method, path, res, info, text);
+  if (!res.ok) {
+    let msg = res.statusText || 'Error';
+    try { msg = JSON.parse(text).error.message; } catch {}
+    throw new Error(`${res.status}: ${msg}`);
+  }
+  return res;
+}
+
+async function run(fn) {
+  try { await fn(); } catch (e) { notify(e.message, true); }
+}
+
+/* ---------- Operaciones ---------- */
+async function health() {
+  const res = await api('GET', '/api/health');
+  const j = await res.json();
+  notify(`Conexión correcta. Estado: ${j.status}`);
+}
+
+async function list() {
+  const res = await api('GET', `${FILES}?page=${page}&limit=${LIMIT}`);
+  const data = await res.json();
+  if (!data.data.length && page > 1) { page--; return list(); }
+  render(data);
+}
+
+function chosenFile() {
+  const f = $('#file').files[0];
+  if (!f) throw new Error('Selecciona un archivo primero');
+  return f;
+}
+
+async function post() {
+  const f = chosenFile();
+  const fd = new FormData();
+  fd.append('file', f);
+  const res = await api('POST', FILES, { body: fd, info: `multipart/form-data, file=${f.name} (${fmtSize(f.size)})` });
+  notify(`Subido correctamente (201). Location: ${res.headers.get('location') || '(no expuesto)'}`);
+  await list();
+}
+
+async function put() {
+  const f = chosenFile();
+  const res = await api('PUT', `${FILES}/${encodeURIComponent(f.name)}`, {
+    body: f,
+    headers: { 'Content-Type': f.type || 'application/octet-stream' },
+    info: `cuerpo binario, ${fmtSize(f.size)}`,
+  });
+  notify(res.status === 201 ? 'Archivo creado (201)' : 'Archivo reemplazado (200)');
+  await list();
+}
+
+async function download(name) {
+  const res = await api('GET', `${FILES}/${encodeURIComponent(name)}`);
+  const blob = await res.blob();
+  const a = el('a', { href: URL.createObjectURL(blob), download: name });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  notify(`Descargado: ${name}`);
+}
+
+async function head(name) {
+  const res = await api('HEAD', `${FILES}/${encodeURIComponent(name)}`);
+  notify(`${name} → tipo: ${res.headers.get('content-type')}, tamaño: ${fmtSize(+res.headers.get('content-length'))}, modificado: ${res.headers.get('last-modified')}`);
+}
+
+async function rename(name) {
+  const newName = prompt(`Nuevo nombre para "${name}":`, name);
+  if (!newName || newName === name) return;
+  await api('PATCH', `${FILES}/${encodeURIComponent(name)}`, {
+    body: JSON.stringify({ name: newName }),
+    headers: { 'Content-Type': 'application/json' },
+    info: `JSON { "name": "${newName}" }`,
+  });
+  notify(`Renombrado: ${name} → ${newName}`);
+  await list();
+}
+
+async function remove(name) {
+  if (!confirm(`¿Eliminar "${name}"?`)) return;
+  await api('DELETE', `${FILES}/${encodeURIComponent(name)}`);
+  notify(`Eliminado: ${name} (204)`);
+  await list();
+}
+
+/* ---------- Render ---------- */
+function render({ data, pagination: p, _links }) {
+  const tbody = $('#rows');
+  tbody.replaceChildren();
+  if (!data.length) tbody.append(el('tr', {}, el('td', { colSpan: 4, className: 'muted', textContent: 'No hay archivos' })));
+  for (const f of data) {
+    const btn = (label, fn, className = '') => el('button', { textContent: label, className, onclick: () => run(() => fn(f.name)) });
+    tbody.append(el('tr', {},
+      el('td', { textContent: f.name }),
+      el('td', { textContent: fmtSize(f.size) }),
+      el('td', { textContent: new Date(f.modifiedAt).toLocaleString() }),
+      el('td', { className: 'acts' },
+        btn('Descargar', download), btn('HEAD', head), btn('Renombrar', rename), btn('Eliminar', remove, 'danger'))));
+  }
+  $('#pageinfo').textContent = `Página ${p.page} de ${p.totalPages} · ${p.total} archivo(s)`;
+  $('#prev').disabled = !_links.prev;
+  $('#next').disabled = !_links.next;
+}
+
+$('#btnHealth').onclick = () => run(health);
+$('#btnList').onclick = () => run(list);
+$('#btnPost').onclick = () => run(post);
+$('#btnPut').onclick = () => run(put);
+$('#btnClear').onclick = () => $('#log').replaceChildren();
+$('#prev').onclick = () => run(() => { page--; return list(); });
+$('#next').onclick = () => run(() => { page++; return list(); });
+$('#prev').disabled = $('#next').disabled = true;
+
+run(list);
+</script>
+</body>
+</html>

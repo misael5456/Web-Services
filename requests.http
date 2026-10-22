@@ -1,0 +1,58 @@
+### Pruebas con la extensión "REST Client" de VS Code.
+### En Codespaces usa la URL del puerto 3000 (pestaña PORTS), p. ej.:
+###   @host = https://TU-CODESPACE-3000.app.github.dev
+@host = http://localhost:3000
+### Si activaste API_KEY en .env, descomenta el header x-api-key en cada petición
+@apiKey = cambia-esta-clave
+
+### 0. Health check
+GET {{host}}/api/health
+
+### 1. Listar (con paginación)
+GET {{host}}/api/files?page=1&limit=10
+# x-api-key: {{apiKey}}
+
+### 2. Subir archivo (POST multipart) -> 201 + Location
+POST {{host}}/api/files
+# x-api-key: {{apiKey}}
+Content-Type: multipart/form-data; boundary=----Boundary
+
+------Boundary
+Content-Disposition: form-data; name="file"; filename="hola.txt"
+Content-Type: text/plain
+
+< ./samples/hola.txt
+------Boundary--
+
+### 3. Descargar
+GET {{host}}/api/files/hola.txt
+
+### 4. Metadatos (HEAD)
+HEAD {{host}}/api/files/hola.txt
+
+### 5. Crear/Reemplazar (PUT) -> 201 la primera vez, 200 después
+PUT {{host}}/api/files/notas.txt
+Content-Type: text/plain
+
+Contenido de mis notas
+
+### 6. Renombrar (PATCH)
+PATCH {{host}}/api/files/notas.txt
+Content-Type: application/json
+
+{ "name": "notas-v2.txt" }
+
+### 7. Eliminar -> 204
+DELETE {{host}}/api/files/notas-v2.txt
+
+### 8. Error 404
+GET {{host}}/api/files/no-existe.txt
+
+### 9. Error 400 (path traversal)
+GET {{host}}/api/files/..%2F..%2Fetc%2Fpasswd
+
+### 10. Error 415 (extensión no permitida)
+PUT {{host}}/api/files/malware.exe
+Content-Type: application/octet-stream
+
+contenido
